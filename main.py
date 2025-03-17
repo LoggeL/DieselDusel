@@ -101,17 +101,38 @@ class TelegramBot:
         """Send a message when the command /help is issued."""
         logger.info(f"Help command received from user {update.effective_user.id}")
         help_text = (
-            "📸 To use this bot:\n\n"
+            "📸 Available Commands:\n\n"
+            "/start - Start the bot and get welcome message\n"
+            "/help - Show this help message\n"
+            "/cancel - Cancel current image processing session\n\n"
+            "How to use the bot:\n\n"
             "1. Take a clear photo of your car's display\n"
             "2. Send the photo to this bot\n"
             "3. Wait for the analysis results\n\n"
             "The photo should clearly show:\n"
             "- Fuel consumption (Verbrauch)\n"
             "- Total kilometers\n"
-            "- Trip kilometers"
+            "- Trip kilometers\n\n"
+            "If you send the wrong image first, use /cancel to start over."
         )
         await update.message.reply_text(help_text)
         logger.info(f"Help message sent to user {update.effective_user.id}")
+
+    async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Cancel the current image processing session."""
+        user_id = update.effective_user.id
+        logger.info(f"Cancel command received from user {user_id}")
+
+        if "previous_stats" in context.user_data:
+            context.user_data["previous_stats"] = None
+            await update.message.reply_text(
+                "✅ Session cancelled. You can now start over by sending a new image."
+            )
+        else:
+            await update.message.reply_text(
+                "ℹ️ No active session to cancel. You can start by sending an image."
+            )
+        logger.info(f"Session cancelled for user {user_id}")
 
     def encode_image(self, image: bytes) -> str:
         """Encode the image to base64."""
@@ -336,6 +357,7 @@ Provide the response as a JSON object with two fields:
         # Add handlers
         application.add_handler(CommandHandler("start", self.start))
         application.add_handler(CommandHandler("help", self.help_command))
+        application.add_handler(CommandHandler("cancel", self.cancel))
         application.add_handler(MessageHandler(filters.PHOTO, self.handle_photo))
         application.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text)
