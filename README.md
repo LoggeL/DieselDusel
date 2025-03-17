@@ -2,6 +2,8 @@
 
 A Telegram bot that helps you track your car's fuel consumption and costs by analyzing photos of your car's dashboard and fuel receipts.
 
+![DieselDusel Bot Interface](Screenshot.webp)
+
 ## Features
 
 - 📸 Analyzes photos of car dashboards and fuel receipts
