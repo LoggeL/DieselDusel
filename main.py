@@ -167,7 +167,7 @@ Provide the response as a JSON object with two fields:
                         ],
                     }
                 ],
-                "temperature": 0.7,
+                "temperature": 0.3,
                 "max_tokens": 1024,
                 "top_p": 1,
                 "response_format": {"type": "json_object"},
