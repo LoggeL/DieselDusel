@@ -1,0 +1,13 @@
+services:
+  dieseldusel:
+    build: .
+    container_name: dieseldusel
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    external: true
