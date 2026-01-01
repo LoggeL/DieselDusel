@@ -6,7 +6,7 @@ from io import BytesIO
 from typing import Optional
 
 from telegram import Update
-from telegram.constants import ParseMode
+from telegram.constants import ParseMode, ChatAction
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -40,16 +40,16 @@ class ImageClassification(BaseModel):
 class DashboardStats(BaseModel):
     """Dashboard Stats from car display"""
 
-    consumption: float = Field(
-        ...,
+    consumption: Optional[float] = Field(
+        default=None,
         description="fuel consumption noted with 'Verbrauch' in the unit l/100km as stated on the car's dashboard",
     )
-    total_km: int = Field(
-        ...,
+    total_km: Optional[int] = Field(
+        default=None,
         description="total Kilometer noted with 'km' as stated on the car's dashboard",
     )
-    trip_km: float = Field(
-        ...,
+    trip_km: Optional[float] = Field(
+        default=None,
         description="Trip km (number on bottom right of the display) in kilometers as stated on the car's dashboard",
     )
 
@@ -57,12 +57,16 @@ class DashboardStats(BaseModel):
 class ReceiptStats(BaseModel):
     """Fuel station receipt stats"""
 
-    price_per_liter: float = Field(
-        ...,
+    price_per_liter: Optional[float] = Field(
+        default=None,
         description="price per liter (in Euro) as stated on the receipt (e.g. 1.599)",
     )
-    total_cost: float = Field(..., description="total cost in Euro from the receipt")
-    date: str = Field(..., description="date of the receipt in the format YYYY-MM-DD")
+    total_cost: Optional[float] = Field(
+        default=None, description="total cost in Euro from the receipt"
+    )
+    date: Optional[str] = Field(
+        default=None, description="date of the receipt in the format YYYY-MM-DD"
+    )
 
 
 class TelegramBot:
@@ -148,23 +152,20 @@ class TelegramBot:
             output_buffer = BytesIO()
             image.save(output_buffer, format="JPEG", quality=85, optimize=True)
             logger.debug("Image converted and optimized")
-            # Write to file
-            with open("image.jpg", "wb") as f:
-                f.write(output_buffer.getvalue())
             base64_image = self.encode_image(output_buffer.getvalue())
-            logger.debug("Image saved and encoded")
+            logger.debug("Image encoded")
 
             # Create OpenRouter API request for both classification and processing
             logger.info("Sending processing request to OpenRouter API")
             headers = {
                 "Authorization": f"Bearer {self.openrouter_api_key}",
-                "HTTP-Referer": "https://github.com/yourusername/dieseldusel",  # Replace with your actual repo URL
+                "HTTP-Referer": "https://github.com/LoggeL/DieselDusel",
                 "Content-Type": "application/json",
-                "X-Title": "DieselDusel Bot",  # Optional, but good practice
+                "X-Title": "DieselDusel Bot",
             }
 
             payload = {
-                "model": "google/gemini-2.0-flash-001",
+                "model": "google/gemini-3-flash-preview",
                 "messages": [
                     {
                         "role": "user",
@@ -172,8 +173,8 @@ class TelegramBot:
                             {
                                 "type": "text",
                                 "text": f"""Analyze this image and provide two things:
-1. Classification: Determine if this is a dashboard or receipt image according to this schema: {ImageClassification.schema()}
-2. Data Extraction: Extract the relevant data according to this schema: {DashboardStats.schema()} for dashboard or {ReceiptStats.schema()} for receipt
+1. Classification: Determine if this is a dashboard or receipt image according to this schema: {ImageClassification.model_json_schema()}
+2. Data Extraction: Extract the relevant data according to this schema: {DashboardStats.model_json_schema()} for dashboard or {ReceiptStats.model_json_schema()} for receipt
 
 Provide the response as a JSON object with two fields:
 - classification: The classification result
@@ -233,12 +234,66 @@ Provide the response as a JSON object with two fields:
             logger.error(f"Error processing image: {str(e)}")
             return None
 
+    def format_dashboard_stats(self, stats: DashboardStats) -> str:
+        """Format dashboard statistics for display."""
+        consumption = (
+            f"{stats.consumption:.1f}" if stats.consumption is not None else "Unknown"
+        )
+        total_km = f"{stats.total_km:,}" if stats.total_km is not None else "Unknown"
+        trip_km = f"{stats.trip_km:.1f}" if stats.trip_km is not None else "Unknown"
+
+        return (
+            f"• ⛽ Consumption: {consumption} l/100km\n"
+            f"• 🚗 Total Distance: {total_km} km\n"
+            f"• 🛣 Trip Distance: {trip_km} km"
+        )
+
+    def format_receipt_stats(self, stats: ReceiptStats) -> str:
+        """Format receipt statistics for display."""
+        date = stats.date if stats.date else "Unknown"
+        price = (
+            f"{stats.price_per_liter:.3f}"
+            if stats.price_per_liter is not None
+            else "Unknown"
+        )
+        total = f"{stats.total_cost:.2f}" if stats.total_cost is not None else "Unknown"
+
+        return f"• 📅 Date: {date}\n• 💰 Price: {price} €/l\n• 💸 Total: {total} €"
+
+    def create_csv_file(
+        self, dashboard_stats: DashboardStats, receipt_stats: ReceiptStats, note: str
+    ) -> BytesIO:
+        """Create a CSV file in memory."""
+        liters = (
+            receipt_stats.total_cost / receipt_stats.price_per_liter
+            if receipt_stats.price_per_liter and receipt_stats.total_cost
+            else 0
+        )
+
+        csv_content = (
+            "date;total-km;trip-km;liter;costs;euro_per_liter;consumption;note\n"
+            f"{receipt_stats.date or ''};{dashboard_stats.total_km or ''};"
+            f"{dashboard_stats.trip_km or ''};{liters:.2f};"
+            f"{receipt_stats.total_cost or ''};{receipt_stats.price_per_liter or ''};"
+            f"{dashboard_stats.consumption or ''};{note}\n"
+        )
+
+        output = BytesIO(csv_content.encode("utf-8"))
+        output.name = f"fuel_log_{receipt_stats.date or 'unknown'}.csv"
+        return output
+
     async def handle_photo(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
         """Handle incoming photos."""
         user_id = update.effective_user.id
         logger.info(f"Received photo from user {user_id}")
+
+        # Send typing action
+        await context.bot.send_chat_action(
+            chat_id=update.effective_chat.id, action=ChatAction.TYPING
+        )
+
         try:
             # Send initial processing message
             processing_message = await update.message.reply_text(
@@ -270,14 +325,22 @@ Provide the response as a JSON object with two fields:
                 # Store first image stats
                 context.user_data["previous_stats"] = stats
                 logger.info(f"Stored first image stats for user {user_id}")
-                if image_type == "dashboard":
-                    await processing_message.edit_text(
-                        f"✅ First image processed ({image_type}). Values: {stats}. Please send the receipt image."
-                    )
-                else:
-                    await processing_message.edit_text(
-                        f"✅ First image processed ({image_type}). Values: {stats}. Please send the dashboard image."
-                    )
+
+                formatted_stats = (
+                    self.format_dashboard_stats(stats)
+                    if image_type == "dashboard"
+                    else self.format_receipt_stats(stats)
+                )
+
+                next_type = "receipt" if image_type == "dashboard" else "dashboard"
+                emoji = "🧾" if next_type == "receipt" else "🚗"
+
+                await processing_message.edit_text(
+                    f"✅ **{image_type.title()} Scanned**\n\n"
+                    f"{formatted_stats}\n\n"
+                    f"Please send the {emoji} {next_type} image next.",
+                    parse_mode=ParseMode.MARKDOWN,
+                )
                 return
 
             # We have both images now
@@ -311,25 +374,40 @@ Provide the response as a JSON object with two fields:
 
             # Format the merged response message
             response = (
-                "✅ Analysis complete!\n\n"
-                f"⛽ Fuel consumption: {dashboard_stats.consumption:.1f} l/100km\n"
-                f"🚗 Total distance: {dashboard_stats.total_km} km\n"
-                f"🛣 Trip distance: {dashboard_stats.trip_km:.1f} km"
-                f"\n\n💰 Price per liter: {receipt_stats.price_per_liter:.3f} €/l\n"
-                f"💸 Total cost: {receipt_stats.total_cost:.2f} €"
+                "✅ **Analysis Complete!**\n\n"
+                f"{self.format_dashboard_stats(dashboard_stats)}\n\n"
+                f"{self.format_receipt_stats(receipt_stats)}"
             )
-            await processing_message.edit_text(response)
+            await processing_message.edit_text(response, parse_mode=ParseMode.MARKDOWN)
             logger.info(f"Sent analysis results to user {user_id}")
 
-            # csv code block
-            csv_response = (
-                "```csv\n"
-                + "date;total-km;trip-km;liter;costs;euro_per_liter;consumption;note\n"
-                + f"{receipt_stats.date};{dashboard_stats.total_km};{dashboard_stats.trip_km};{receipt_stats.total_cost};{receipt_stats.price_per_liter};{dashboard_stats.consumption};{note}\n"
-                + "```"
+            # Generate and send CSV file
+            csv_file = self.create_csv_file(dashboard_stats, receipt_stats, note)
+            await update.message.reply_document(
+                document=csv_file,
+                caption="📊 Here is your data ready for Excel/Numbers",
+                filename=csv_file.name,
             )
-            await update.message.reply_text(csv_response, parse_mode=ParseMode.MARKDOWN)
+
+            # Send code block for quick view
+            liters = (
+                receipt_stats.total_cost / receipt_stats.price_per_liter
+                if receipt_stats.price_per_liter and receipt_stats.total_cost
+                else 0
+            )
+
+            csv_preview = (
+                "```csv\n"
+                "date;total-km;trip-km;liter;costs;euro_per_liter;consumption;note\n"
+                f"{receipt_stats.date or ''};{dashboard_stats.total_km or ''};"
+                f"{dashboard_stats.trip_km or ''};{liters:.2f};"
+                f"{receipt_stats.total_cost or ''};{receipt_stats.price_per_liter or ''};"
+                f"{dashboard_stats.consumption or ''};{note}\n"
+                "```"
+            )
+            await update.message.reply_text(csv_preview, parse_mode=ParseMode.MARKDOWN)
             logger.info(f"Sent CSV data to user {user_id}")
+
         except Exception as e:
             logger.error(f"Error handling photo for user {user_id}: {str(e)}")
             if "processing_message" in locals():
