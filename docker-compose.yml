@@ -5,9 +5,14 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    volumes:
+      - dieseldusel_data:/app/data
     networks:
       - proxy
 
 networks:
   proxy:
     external: true
+
+volumes:
+  dieseldusel_data:

@@ -38,3 +38,6 @@ wheels/
 *.log
 
 pics/
+
+# Database
+*.db
